@@ -138,20 +138,6 @@
   height: 100vh;
 }
 
-.header-container {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 10px;
-  background: white;
-  padding: 10px;
-  border-radius: 10px;
-  z-index: 1000;
-  align-items: center;
-}
-
 .input-overlay {
   display: flex;
   flex-direction: row;

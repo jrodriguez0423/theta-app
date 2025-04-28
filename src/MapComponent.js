@@ -101,22 +101,6 @@ const MapComponent = () => {
     }
   };
 
-  const handleUseMyLocation = () => {
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const userCoords = [position.coords.latitude, position.coords.longitude];
-        setStartCoords(userCoords);
-        setStartLocation("Current Location"); // optional: update UI
-        console.log("User current location:", userCoords);
-      },
-      (error) => {
-        console.error("Error getting user location:", error);
-        alert("Failed to get your location. Please allow location access.");
-      },
-      { enableHighAccuracy: true }
-    );
-  };
-  
   const calculateETA = () => {
     if (adjustedDuration === null) return "";
   
@@ -199,24 +183,6 @@ const MapComponent = () => {
     }
   };
   
-
-
-
-  useEffect(() => {
-    const getUserLocation = () => {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const userCoords = [position.coords.latitude, position.coords.longitude];
-          setStartCoords(userCoords);
-        },
-        (error) => console.error("Geolocation error:", error),
-        { enableHighAccuracy: true }
-      );
-    };
-  
-    getUserLocation();
-  }, []);
-  
   useEffect(() => {
     if (!mapRef.current) {
       const map = L.map('map').setView([0, 0], 2); // Default start view
@@ -285,8 +251,17 @@ useEffect(() => {
 
 
 const handleSubmit = async () => {
-  const startCoordinates = await getCoords(startLocation);
-  const endCoordinates = await getCoords(endLocation);
+  let startCoordinates;
+  let endCoordinates;
+
+  // ⚡️ NEW: If user used "Current Location", skip geocoding and use already known startCoords
+  if (startLocation === "Current Location" && startCoords) {
+    startCoordinates = startCoords;
+  } else {
+    startCoordinates = await getCoords(startLocation);
+  }
+
+  endCoordinates = await getCoords(endLocation);
 
   if (!startCoordinates || !endCoordinates) {
     alert("Invalid address. Please try again.");
@@ -296,7 +271,7 @@ const handleSubmit = async () => {
   setStartCoords(startCoordinates);
   setEndCoords(endCoordinates);
 
-  const routeSummary = await getDirectionsAndDrawRoute(startCoordinates, endCoordinates); // ✅ NEW FUNCTION
+  const routeSummary = await getDirectionsAndDrawRoute(startCoordinates, endCoordinates);
 
   if (routeSummary) {
     const duration = routeSummary.duration; // in seconds
@@ -322,9 +297,6 @@ const handleSubmit = async () => {
   }
 };
 
-
-
-
   return (
     <div className="map-wrapper">
       {/* New header container for logo and input row */}
@@ -334,9 +306,6 @@ const handleSubmit = async () => {
   
         {/* Input row remains centered */}
         <div className="input-overlay">
-          <button onClick={handleUseMyLocation} className="secondary-button">
-            Use My Current Location
-          </button>
           <input
             type="text"
             placeholder="Enter start location"
