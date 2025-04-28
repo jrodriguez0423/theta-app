@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet-routing-machine';
 import './App.css';
@@ -14,17 +13,16 @@ const MapComponent = () => {
   const [endLocation, setEndLocation] = useState('');
   const [startCoords, setStartCoords] = useState();
   const [endCoords, setEndCoords] = useState();
-  const [transportMode, setTransportMode] = useState('driving-car'); // Default mode
   const [departureTime, setDepartureTime] = useState(''); // User-selected departure time
   const [directions, setDirections] = useState(null);
-
+  const [prediction, setPrediction] = useState(null);
+  const [totalDuration, setTotalDuration] = useState(null); // in seconds
+  const [directionsVisible, setDirectionsVisible] = useState(true);
 
   const mapRef = useRef(null);
   const startMarkerRef = useRef(null);
-  const endMarkerRef = useRef(null);
-  const routeRef = useRef(null);
-
-  const metersToMiles = (meters) => meters * 0.000621371;
+  const adjustedDuration = totalDuration * prediction;
+  const routeLayerRef = useRef(null); // Add this near mapRef at the top
 
   const userLocationIcon = L.icon({
     iconUrl: userMarkerIcon,  // Use your own image file
@@ -33,7 +31,47 @@ const MapComponent = () => {
     popupAnchor: [0, -32]
   });
 
+  const getPrediction = async ({ PM_HOUR, BACK_PEAK_HOUR, AHEAD_PEAK_HOUR, BACK_AADT, AHEAD_AADT }) => {
+    try {
+      const response = await fetch("https://theta-svm.onrender.com/predict/", {   // <-- Note the slash!
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          PM_HOUR,
+          BACK_PEAK_HOUR,
+          AHEAD_PEAK_HOUR,
+          BACK_AADT,
+          AHEAD_AADT,
+        }),
+      });
+  
+      const data = await response.json();
+      console.log("Server Response:", data);
+      
+      // ✅ Now access "Predicted Traffic Multiplier" correctly
+      return data["Predicted Traffic Multiplier"];
+    } catch (err) {
+      console.error("Prediction request failed:", err);
+      return null;
+    }
+  };    
 
+  const formatDuration = (seconds) => {
+    if (seconds === null) return "";
+  
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+  
+    if (hours > 0) {
+      return `${hours} hr ${remainingMinutes} min`;
+    } else {
+      return `${minutes} min`;
+    }
+  };
+  
   const getCoords = async (address) => {
     if (!address.trim()) {
         console.error("Error: Address is empty");
@@ -63,52 +101,104 @@ const MapComponent = () => {
     }
   };
 
+  const handleUseMyLocation = () => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const userCoords = [position.coords.latitude, position.coords.longitude];
+        setStartCoords(userCoords);
+        setStartLocation("Current Location"); // optional: update UI
+        console.log("User current location:", userCoords);
+      },
+      (error) => {
+        console.error("Error getting user location:", error);
+        alert("Failed to get your location. Please allow location access.");
+      },
+      { enableHighAccuracy: true }
+    );
+  };
+  
+  const calculateETA = () => {
+    if (adjustedDuration === null) return "";
+  
+    // If user picked a departure time, use it; otherwise use current time
+    const baseTime = departureTime ? new Date(departureTime) : new Date();
+  
+    // Add adjusted duration (in seconds) to base time
+    const eta = new Date(baseTime.getTime() + adjustedDuration * 1000);
+  
+    // Format nicely (like 11:43 AM)
+    const hours = eta.getHours();
+    const minutes = eta.getMinutes().toString().padStart(2, '0');
+  
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const formattedHour = hours % 12 === 0 ? 12 : hours % 12;
+  
+    return `${formattedHour}:${minutes} ${ampm}`;
+  };
 
-  const getDirections = async (startCoords, endCoords) => {
+
+  const getDirectionsAndDrawRoute = async (startCoords, endCoords) => {
     if (!startCoords || !endCoords) {
-        console.error("Error: Missing coordinates for directions request.");
-        return null;
+      console.error("Error: Missing coordinates for directions request.");
+      return null;
     }
-
+  
     try {
-        const response = await fetch(`https://api.openrouteservice.org/v2/directions/${transportMode}`, {
-            method: "POST",
-            headers: {
-                'Authorization': apiKey,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                coordinates: [
-                    [startCoords[1], startCoords[0]], // Correct order: [longitude, latitude]
-                    [endCoords[1], endCoords[0]]     // Correct order: [longitude, latitude]
-                ],
-                instructions: true,
-                radiuses: [500, 500] // Expands search radius in case of off-road locations
-            }),
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error("Directions API Error:", errorData);
-            alert(`Error fetching directions: ${errorData.error?.message || "Unknown error"}`);
-            return null;
-        }
-
-        const data = await response.json();
-        if (!data.routes || data.routes.length === 0) {
-            console.error("No routes found.");
-            alert("No route found. Please check your locations and try again.");
-            return null;
-        }
-
-        setDirections(data.routes[0].segments[0].steps);
-        return data.routes[0].summary;
-    } catch (error) {
-        console.error("Error fetching directions:", error.message);
-        alert("Failed to fetch directions. Please try again later.");
+      const response = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+        method: "POST",
+        headers: {
+          'Authorization': apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          coordinates: [
+            [startCoords[1], startCoords[0]],
+            [endCoords[1], endCoords[0]]
+          ],
+          instructions: true,
+          radiuses: [1000, 1000]
+        }),
+      });
+  
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Directions API Error:", errorData);
+        alert(`Error fetching directions: ${errorData.error?.message || "Unknown error"}`);
         return null;
+      }
+  
+      const data = await response.json();
+      console.log("Fetched Route Data:", data);
+  
+      if (!data.features || data.features.length === 0) {
+        console.error("No routes found.");
+        alert("No route found. Please check your locations and try again.");
+        return null;
+      }
+  
+      // ✅ Extract steps (instructions)
+      const steps = data.features[0].properties.segments[0].steps;
+      setDirections(steps);
+  
+      // ✅ Extract geometry and draw the line
+      const routeCoordinates = data.features[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
+  
+      if (routeLayerRef.current) {
+        mapRef.current.removeLayer(routeLayerRef.current);
+      }
+  
+      routeLayerRef.current = L.polyline(routeCoordinates, { color: 'blue', weight: 5 }).addTo(mapRef.current);
+      mapRef.current.fitBounds(routeLayerRef.current.getBounds());
+  
+      // ✅ Return the summary too
+      return data.features[0].properties.summary;
+    } catch (error) {
+      console.error("Error fetching or drawing route:", error.message);
+      alert("Failed to fetch directions. Please try again later.");
+      return null;
     }
   };
+  
 
 
 
@@ -150,44 +240,90 @@ const MapComponent = () => {
     }
   }, [startCoords]);  
   
-  useEffect(() => {
-    if (!mapRef.current || !startCoords || !endCoords) return;
 
-    if (!routeRef.current) {
-        routeRef.current = L.Routing.control({
-            waypoints: [L.latLng(startCoords), L.latLng(endCoords)],
-            routeWhileDragging: true,
-            createMarker: () => null,
-            lineOptions: {
-                styles: [{ color: "#007bff", weight: 5 }]
-            }
-        }).addTo(mapRef.current);
-    } else {
-        routeRef.current.setWaypoints([L.latLng(startCoords), L.latLng(endCoords)]);
+useEffect(() => {
+  if (!mapRef.current || !startCoords || !endCoords) return;
+
+  // 🚨 Clear old route if exists
+  if (routeLayerRef.current) {
+    mapRef.current.removeLayer(routeLayerRef.current);
+    routeLayerRef.current = null;
+  }
+  
+  const fetchRoute = async () => {
+    try {
+      const response = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+        method: 'POST',
+        headers: {
+          'Authorization': apiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          coordinates: [
+            [startCoords[1], startCoords[0]], // long, lat
+            [endCoords[1], endCoords[0]]      // long, lat
+          ]
+        })
+      });
+
+      const data = await response.json();
+
+      const routeCoordinates = data.features[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
+
+      // 🚀 Draw the route manually
+      routeLayerRef.current = L.polyline(routeCoordinates, { color: 'blue', weight: 5 }).addTo(mapRef.current);
+
+      mapRef.current.fitBounds(routeLayerRef.current.getBounds());
+    } catch (err) {
+      console.error("Routing fetch error:", err);
     }
+  };
+
+  fetchRoute();
 }, [startCoords, endCoords]);
 
 
-  const handleSubmit = async () => {
+
+const handleSubmit = async () => {
   const startCoordinates = await getCoords(startLocation);
   const endCoordinates = await getCoords(endLocation);
 
   if (!startCoordinates || !endCoordinates) {
-      alert("Invalid address. Please try again.");
-      return;
+    alert("Invalid address. Please try again.");
+    return;
   }
 
   setStartCoords(startCoordinates);
   setEndCoords(endCoordinates);
 
-  // Wait for state to update before fetching directions
-  setTimeout(async () => {
-      const directions = await getDirections(startCoordinates, endCoordinates);
-      if (directions) {
-          console.log("Estimated Travel Time:", (directions.duration / 60).toFixed(2), "minutes");
-      }
-    }, 500);
-  };
+  const routeSummary = await getDirectionsAndDrawRoute(startCoordinates, endCoordinates); // ✅ NEW FUNCTION
+
+  if (routeSummary) {
+    const duration = routeSummary.duration; // in seconds
+    setTotalDuration(duration);
+
+    const departureHour = new Date(departureTime).getHours();
+    const backPeakHour = 17;
+    const aheadPeakHour = 17;
+    const backAADT = 50000;
+    const aheadAADT = 60000;
+
+    const predictionResult = await getPrediction({
+      PM_HOUR: departureHour,
+      BACK_PEAK_HOUR: backPeakHour,
+      AHEAD_PEAK_HOUR: aheadPeakHour,
+      BACK_AADT: backAADT,
+      AHEAD_AADT: aheadAADT
+    });
+
+    if (predictionResult !== null) {
+      setPrediction(predictionResult);
+    }
+  }
+};
+
+
+
 
   return (
     <div className="map-wrapper">
@@ -198,6 +334,9 @@ const MapComponent = () => {
   
         {/* Input row remains centered */}
         <div className="input-overlay">
+          <button onClick={handleUseMyLocation} className="secondary-button">
+            Use My Current Location
+          </button>
           <input
             type="text"
             placeholder="Enter start location"
@@ -212,14 +351,6 @@ const MapComponent = () => {
             onChange={(e) => setEndLocation(e.target.value)}
             className="input-field"
           />
-          <select
-            onChange={(e) => setTransportMode(e.target.value)}
-            className="select-field"
-          >
-            <option value="driving-car">Car</option>
-            <option value="cycling-regular">Bike</option>
-            <option value="foot-walking">Walking</option>
-          </select>
           <input
             type="datetime-local"
             onChange={(e) => setDepartureTime(e.target.value)}
@@ -233,18 +364,56 @@ const MapComponent = () => {
   
       {/* Map container remains below */}
       <div id="map" className="map-container"></div>
-  
+
+      {/* Expand Button when Directions are Hidden */}
+      {directions && !directionsVisible && (
+        <button 
+          onClick={() => setDirectionsVisible(true)} 
+          className="expand-button"
+          style={{
+            position: 'absolute',
+            top: 10,
+            right: 10,
+            zIndex: 1000,
+            background: '#007bff',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            padding: '8px 12px',
+            cursor: 'pointer'
+          }}
+        >
+          Show Directions
+        </button>
+      )}
+
       {/* Directions Container Positioned on the Right */}
-      {directions && (
-      <div className="directions-wrapper">
-        <h3>Directions</h3>
-        <div className="directions-container">
-          {directions.map((step, index) => (
-            <p key={index}>{step.instruction}</p>
-          ))}
+      {directions && directionsVisible && (
+        <div className="directions-wrapper">
+          {/* directions content */}
+          <button onClick={() => setDirectionsVisible(false)} className="collapse-button">Hide Directions</button>
+          <h3>Directions</h3>
+
+          {prediction !== null && (
+            <p><strong>Predicted Traffic Multiplier:</strong> {prediction}</p>
+          )}
+          {totalDuration !== null && (
+            <p><strong>Regular Travel Time:</strong> {formatDuration(totalDuration)}</p>
+          )}
+          {totalDuration !== null && (
+            <p><strong>Adjusted Travel Time:</strong> {formatDuration(adjustedDuration)}</p>
+          )}
+          {totalDuration !== null && (
+            <p><strong>Estimated Arrival Time (ETA):</strong> {calculateETA()}</p>
+          )}
+
+          <div className="directions-container">
+            {directions.map((step, index) => (
+              <p key={index}>{step.instruction}</p>
+            ))}
+          </div>
         </div>
-      </div>
-    )}
+      )}
     </div>
   );  
 };

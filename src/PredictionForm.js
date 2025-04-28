@@ -30,8 +30,11 @@ const PredictionForm = () => {
       });
 
       const data = await response.json();
-      setPrediction(data["Predicted Traffic Volume"]);
-    } catch (error) {
+      setPrediction({
+        multiplier: data["Predicted Traffic Multiplier"],
+        level: data["Traffic Level"] || "N/A"
+      });
+          } catch (error) {
       console.error("Prediction failed:", error);
     }
   };
@@ -48,9 +51,10 @@ const PredictionForm = () => {
 
       <button onClick={submitTrafficPrediction}>Predict</button>
 
-      {prediction !== null && (
+      {prediction && (
         <div>
-          <strong>Predicted Traffic Volume:</strong> {prediction.toFixed(2)}
+          <strong>Predicted Traffic Multiplier:</strong> {prediction.multiplier.toFixed(2)} <br />
+          <strong>Traffic Level:</strong> {prediction.level}
         </div>
       )}
     </div>
