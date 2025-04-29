@@ -127,6 +127,12 @@ const MapComponent = () => {
       return null;
     }
   
+    // 🧹 Remove old route layer if it exists
+    if (routeLayerRef.current) {
+      mapRef.current.removeLayer(routeLayerRef.current);
+      routeLayerRef.current = null;
+    }
+  
     try {
       const response = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
         method: "POST",
@@ -160,21 +166,16 @@ const MapComponent = () => {
         return null;
       }
   
-      // ✅ Extract steps (instructions)
-      const steps = data.features[0].properties.segments[0].steps;
-      setDirections(steps);
-  
-      // ✅ Extract geometry and draw the line
+      // ✅ Draw new route
       const routeCoordinates = data.features[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
-  
-      if (routeLayerRef.current) {
-        mapRef.current.removeLayer(routeLayerRef.current);
-      }
   
       routeLayerRef.current = L.polyline(routeCoordinates, { color: 'blue', weight: 5 }).addTo(mapRef.current);
       mapRef.current.fitBounds(routeLayerRef.current.getBounds());
   
-      // ✅ Return the summary too
+      // ✅ Also extract the steps
+      const steps = data.features[0].properties.segments[0].steps;
+      setDirections(steps);
+  
       return data.features[0].properties.summary;
     } catch (error) {
       console.error("Error fetching or drawing route:", error.message);
@@ -182,6 +183,7 @@ const MapComponent = () => {
       return null;
     }
   };
+  
   
   useEffect(() => {
     if (!mapRef.current) {
@@ -206,50 +208,6 @@ const MapComponent = () => {
     }
   }, [startCoords]);  
   
-
-useEffect(() => {
-  if (!mapRef.current || !startCoords || !endCoords) return;
-
-  // 🚨 Clear old route if exists
-  if (routeLayerRef.current) {
-    mapRef.current.removeLayer(routeLayerRef.current);
-    routeLayerRef.current = null;
-  }
-  
-  const fetchRoute = async () => {
-    try {
-      const response = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
-        method: 'POST',
-        headers: {
-          'Authorization': apiKey,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          coordinates: [
-            [startCoords[1], startCoords[0]], // long, lat
-            [endCoords[1], endCoords[0]]      // long, lat
-          ]
-        })
-      });
-
-      const data = await response.json();
-
-      const routeCoordinates = data.features[0].geometry.coordinates.map(coord => [coord[1], coord[0]]);
-
-      // 🚀 Draw the route manually
-      routeLayerRef.current = L.polyline(routeCoordinates, { color: 'blue', weight: 5 }).addTo(mapRef.current);
-
-      mapRef.current.fitBounds(routeLayerRef.current.getBounds());
-    } catch (err) {
-      console.error("Routing fetch error:", err);
-    }
-  };
-
-  fetchRoute();
-}, [startCoords, endCoords]);
-
-
-
 const handleSubmit = async () => {
   let startCoordinates;
   let endCoordinates;
@@ -277,7 +235,8 @@ const handleSubmit = async () => {
     const duration = routeSummary.duration; // in seconds
     setTotalDuration(duration);
 
-    const departureHour = new Date(departureTime).getHours();
+    const departureDate = departureTime ? new Date(departureTime) : new Date();
+    const departureHour = departureDate.getHours();
     const backPeakHour = 17;
     const aheadPeakHour = 17;
     const backAADT = 50000;
